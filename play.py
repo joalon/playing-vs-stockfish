@@ -1,174 +1,86 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from stockfish import Stockfish
+from prompt_toolkit.application import Application
+from prompt_toolkit.document import Document
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.containers import HSplit, Window
+from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import SearchToolbar, TextArea
+from prompt_toolkit.completion import WordCompleter
 
-pieces = {
-  'K': "\u265A",
-  'Q': "\u265B",
-  'R': "\u265C",
-  'B': "\u265D",
-  'N': "\u265E",
-  'P': "\u265F",
+import chess
+import chess.engine
 
-  'k': "\u2654",
-  'q': "\u2655",
-  'r': "\u2656",
-  'b': "\u2657",
-  'n': "\u2658",
-  'p': "\u2659",
-}
+def main(play_with_engine=False):
+    search_field = SearchToolbar()
+    engine = None
+    if play_with_engine:
+      engine = chess.engine.SimpleEngine.popen_uci('/usr/bin/stockfish')
+    board = chess.Board()
+    chess_completer = WordCompleter([str(x) for x in board.legal_moves])
 
-def fen_to_matrix(fen_string: str, pieces: dict, verbose:bool=False):
-  positions, _, _, _, _, _ = fen_string.split(' ')
-  ranks = positions.split('/')
+    output_field = TextArea(style="class:output-field", text=board.unicode())
+    input_field = TextArea(
+        height=1,
+        prompt=">>> ",
+        style="class:input-field",
+        multiline=False,
+        wrap_lines=False,
+        search_field=search_field,
+        completer = chess_completer,
+        complete_while_typing=True
+    )
+    container = HSplit(
+        [
+            output_field,
+            Window(height=1, char="-", style="class:line"),
+            input_field,
+            search_field,
+        ]
+    )
 
-  board = []
+    def accept(buff):
+        new_move = chess.Move.from_uci(input_field.text)
+        board.push(new_move)
 
-  for i, rank in enumerate(ranks):
-    board.append([])
-    for piece in rank:
-      if piece in pieces:
-        board[i].append(piece)
-      else:
-        for x in range(int(piece)):
-          board[i].append('.')
+        if engine:
+          result = engine.play(board, chess.engine.Limit(time=0.1))
+          board.push(result.move)
 
-  return list(reversed(board))
+        output = board.unicode()
+        output_field.buffer.document = Document(
+            text = output
+        )
 
-def rank_to_fen(rank):
-  fen = ''
-  count = 0
-  for i in range(0, len(rank)):
-    if rank[i] != '.':
-      if count != 0:
-        fen += str(count)
-        count = 0
-      fen += rank[i]
-    else:
-      count += 1
+        input_field.completer = WordCompleter([str(x) for x in board.legal_moves])
 
-  if count != 0:
-    fen += str(count)
-  return fen
+    input_field.accept_handler = accept
 
-def matrix_to_fen(board: list) -> str:
-  new_fen = ''
+    kb = KeyBindings()
 
-  for i in range(7, -1, -1):
-    new_fen += rank_to_fen(board[i]) + '/'
+    @kb.add("c-c")
+    def app_exit(event):
+        event.app.exit()
 
-  # Remove trailing slash in positions
-  new_fen = new_fen[0:len(new_fen)-1]
-  return new_fen
-    
-def move(fen_string: str, move: str) -> str:
-  '''
-  Takes a fen string and a move in algebraic notation and returns the resulting fen string.
+    style = Style(
+        [
+            ("output-field", "bg:#000044 #ffffff"),
+            ("input-field", "bg:#000000 #ffffff"),
+            ("line", "#004400"),
+        ]
+    )
 
-  A move in algebraic chess notation might look like:
-  e2e4  - Moves the piece at e2 to e4
-  O-O   - Castles kingside
-  d8Q   - Promote a pawn to a queen
-  a1a8+ - Moves the piece at a1 to a8 and puts the other players king in check
-  '''
-  positions, current_player, current_castling_options, en_passant_target_square, current_half_move_count, current_full_moves = fen_string.split(' ')
+    application = Application(
+        layout=Layout(container, focused_element=input_field),
+        key_bindings=kb,
+        style=style,
+        mouse_support=True,
+        full_screen=True,
+    )
 
-  board = fen_to_matrix(fen_string, pieces, verbose=True)
+    application.run()
 
-  # Reset en passant square
-  en_passant_target_square = '-'
-
-  # Check if the move is castling
-  if move == 'O-O':
-    pass
-
-  elif move == 'O-O-O':
-    pass
-
-  # Or if it's a pawn promotion
-  elif len(move) == 3:
-    pass
-
-  # Otherwise move as usual
-  else:
-    # Algebraic movement string into matrix coordinates
-    start_x = ord(move[0:1])-96-1
-    start_y = int(move[1:2])-1
-    end_x = ord(move[2:3])-96-1
-    end_y = int(move[3:4])-1
-
-    # Calculate en passant square
-    if board[start_y][start_x] == 'p' or board[start_y][start_x] == 'P':
-      if abs(end_y - start_y) == 2:
-        if current_player == 'w':
-          en_passant_target_square = chr(end_x + 97) + str(end_y)
-        else:
-          en_passant_target_square = chr(end_x + 97) + str(end_y+2)
-
-    # Execute movement
-    board[end_y][end_x] = board[start_y][start_x]
-    board[start_y][start_x] = '.'
-
-  # Calculate half moves since last capture
-  if board[end_y][end_x] == '.':
-    current_half_move_count = int(current_half_move_count) + 1
-  else:
-    current_half_move_count = 0
-
-  # Construct next FEN string
-  new_fen_positions = matrix_to_fen(board)
-  next_player = 'w' if current_player == 'b' else 'b'
-  next_move = int(current_full_moves)+1 if current_player == 'b' else int(current_full_moves)
-
-  new_fen = f"{new_fen_positions} {next_player} {current_castling_options} {en_passant_target_square} {current_half_move_count} {next_move}"
-  return new_fen
-
-def print_board(fen_string: str) -> None:
-    positions = fen_string.split(' ')[0]
-    ranks = positions.split('/')
-
-    global pieces
-
-    for rank in ranks:
-        for piece in rank:
-            if piece in pieces:
-                print(pieces[piece], end=' ')
-            else:
-                print('. ' * int(piece), end='')
-        print()
-
-fen_string = ""
-with open('start.fen', 'r') as f:
-    fen_string = f.readline()
-
-print(fen_string)
-
-# Tests
-step1 = move(fen_string, "e2e4")
-step2 = move(step1, "e7e5")
-step3 = move(step2, "f2f4")
-print(step3)
-
-
-stockfish = Stockfish()
-stockfish.set_fen_position(fen_string)
-while True:
-
-    print(fen_string)
-    print_board(fen_string)
-
-    print(f"Stockfish recommends {stockfish.get_best_move()}")
-
-    while not stockfish.is_move_correct(white_next_move := input(f"Whites next move: ")):
-        pass
-
-    fen_string = move(fen_string, white_next_move)
-    stockfish.set_fen_position(fen_string)
-
-    black_next_move = stockfish.get_best_move()
-    fen_string = move(fen_string, black_next_move)
-    stockfish.set_fen_position(fen_string)
-
-
-
+if __name__ == "__main__":
+    main(play_with_engine=True)
